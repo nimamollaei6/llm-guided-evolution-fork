@@ -2,76 +2,102 @@
 
 import numpy as np
 import pandas as pd
-
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 if __name__ == '__main__':
-    train_df = pd.read_csv("data/train.csv")
-    train_df = train_df.drop(['Ticket', 'Cabin'], axis=1)
-    dataset = train_df
+    # =========================
+    # 1. LOAD DATA
+    # =========================
+
+    df = pd.read_csv("data/train.csv")
 
 
-    dataset['Title'] = dataset.Name.str.extract(r' ([A-Za-z]+)\.', expand=False)
-    dataset['Title'] = dataset['Title'].replace(['Lady', 'Countess','Capt', 'Col',\
- 	'Don', 'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer', 'Dona'], 'Rare')
+    # =========================
+    # 2. FEATURE ENGINEERING
+    # =========================
 
-    dataset['Title'] = dataset['Title'].replace('Mlle', 'Miss')
-    dataset['Title'] = dataset['Title'].replace('Ms', 'Miss')
-    dataset['Title'] = dataset['Title'].replace('Mme', 'Mrs')
+    # Extract titles such as Mr, Mrs, Miss, Master
+    df["Title"] = df["Name"].str.extract(r",\s*([^.]*)\.")
 
-    title_mapping = {"Mr": 1, "Miss": 2, "Mrs": 3, "Master": 4, "Rare": 5}
-    dataset['Title'] = dataset['Title'].map(title_mapping)
-    dataset['Title'] = dataset['Title'].fillna(0)
+    common_titles = ["Mr", "Miss", "Mrs", "Master"]
+    df["Title"] = df["Title"].where(
+        df["Title"].isin(common_titles),
+        "Rare"
+    )
 
-    dataset = dataset.drop(['Name', 'PassengerId'], axis=1)
+    # Family-related features
+    df["FamilySize"] = df["SibSp"] + df["Parch"] + 1
+    df["IsAlone"] = (df["FamilySize"] == 1).astype(int)
+
+
+    # =========================
+    # 3. SELECT FEATURES
+    # =========================
+
+    features = [
+        "Pclass",
+        "Sex",
+        "Age",
+        "SibSp",
+        "Parch",
+        "Fare",
+        "Embarked",
+        "Title",
+        "FamilySize",
+        "IsAlone"
+    ]
+
+    X = df[features]
+    y = df["Survived"]
+
+
+    # =========================
+    # 5. SHARED PREPROCESSING
+    # =========================
+
+    numeric_features = [
+        "Pclass",
+        "Age",
+        "SibSp",
+        "Parch",
+        "Fare",
+        "FamilySize",
+        "IsAlone"
+    ]
+
+    categorical_features = [
+        "Sex",
+        "Embarked",
+        "Title"
+    ]
+
+
+    numeric_processor = Pipeline([
+        ("imputer", SimpleImputer(strategy="median"))
+    ])
+
+
+    categorical_processor = Pipeline([
+        ("imputer", SimpleImputer(strategy="most_frequent")),
+        ("encoder", OneHotEncoder(handle_unknown="ignore"))
+    ])
+
+
+    preprocessor = ColumnTransformer([
+        ("num", numeric_processor, numeric_features),
+        ("cat", categorical_processor, categorical_features)
+    ])
     
-    dataset['Sex'] = dataset['Sex'].map( {'female': 1, 'male': 0} ).astype(int)
+    X_processed = preprocessor.fit_transform(X)
 
-    guess_ages = np.zeros((2,3))
-    for i in range(0, 2):
-        for j in range(0, 3):
-            guess_df = dataset[(dataset['Sex'] == i) & \
-                                  (dataset['Pclass'] == j+1)]['Age'].dropna()
+    processed_df = pd.DataFrame(
+        X_processed,
+        columns=preprocessor.get_feature_names_out()
+    )
+    processed_df["Survived"] = y.values
 
-            age_guess = guess_df.median()
-
-            # Convert random age float to nearest .5 age
-            guess_ages[i,j] = int( age_guess/0.5 + 0.5 ) * 0.5
-            
-    for i in range(0, 2):
-        for j in range(0, 3):
-            dataset.loc[ (dataset.Age.isnull()) & (dataset.Sex == i) & (dataset.Pclass == j+1),\
-                    'Age'] = guess_ages[i,j]
-
-    dataset['Age'] = dataset['Age'].astype(int)
-
-    dataset.loc[ dataset['Age'] <= 16, 'Age'] = 0
-    dataset.loc[(dataset['Age'] > 16) & (dataset['Age'] <= 32), 'Age'] = 1
-    dataset.loc[(dataset['Age'] > 32) & (dataset['Age'] <= 48), 'Age'] = 2
-    dataset.loc[(dataset['Age'] > 48) & (dataset['Age'] <= 64), 'Age'] = 3
-    dataset.loc[ dataset['Age'] > 64, 'Age']
-
-    dataset['FamilySize'] = dataset['SibSp'] + dataset['Parch'] + 1
-
-    dataset['IsAlone'] = 0
-    dataset.loc[dataset['FamilySize'] == 1, 'IsAlone'] = 1
-
-    dataset = dataset.drop(['Parch', 'SibSp', 'FamilySize'], axis=1)
-
-    dataset['Age*Class'] = dataset.Age * dataset.Pclass
-
-    freq_port = dataset.Embarked.dropna().mode()[0]
-    dataset['Embarked'] = dataset['Embarked'].fillna(freq_port)
-    dataset['Embarked'] = dataset['Embarked'].map( {'S': 0, 'C': 1, 'Q': 2} ).astype(int)
-
-    dataset.loc[ dataset['Fare'] <= 7.91, 'Fare'] = 0
-    dataset.loc[(dataset['Fare'] > 7.91) & (dataset['Fare'] <= 14.454), 'Fare'] = 1
-    dataset.loc[(dataset['Fare'] > 14.454) & (dataset['Fare'] <= 31), 'Fare']   = 2
-    dataset.loc[ dataset['Fare'] > 31, 'Fare'] = 3
-    dataset['Fare'] = dataset['Fare'].astype(int)
-
-    print(dataset.head())
-    dataset.to_csv('data/processed_train.csv')
-
-
-
-
+    print(processed_df.head())
+    processed_df.to_csv("data/processed_train.csv", index=False)
